@@ -1,5 +1,6 @@
 package com.ronald.seckill.web;
 
+import com.alibaba.fastjson.JSON;
 import com.ronald.seckill.db.dao.OrderDao;
 import com.ronald.seckill.db.dao.SeckillActivityDao;
 import com.ronald.seckill.db.dao.SeckillCommodityDao;
@@ -7,7 +8,9 @@ import com.ronald.seckill.db.po.Order;
 import com.ronald.seckill.db.po.SeckillActivity;
 import com.ronald.seckill.db.po.SeckillCommodity;
 import com.ronald.seckill.services.SeckillActivityService;
+import com.ronald.seckill.utils.RedisService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,6 +22,7 @@ import org.springframework.web.servlet.ModelAndView;
 import java.math.BigDecimal;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
@@ -36,6 +40,9 @@ public class SeckillActivityController {
 
     @Autowired
     private OrderDao orderDao;
+
+    @Autowired
+    RedisService redisService;
 
 
     /**
@@ -59,8 +66,27 @@ public class SeckillActivityController {
      */
     @RequestMapping("/item/{seckillActivityId}")
     public String itemPage(Map<String,Object> resultMap,@PathVariable long seckillActivityId){
-        SeckillActivity seckillActivity = seckillActivityDao.querySeckillActivityById(seckillActivityId);
-        SeckillCommodity seckillCommodity = seckillCommodityDao.querySeckillCommodityById(seckillActivity.getCommodityId());
+        SeckillActivity seckillActivity;
+        SeckillCommodity seckillCommodity;
+        String seckillActivityInfo = redisService.getValue("seckillActivity:" + seckillActivityId);
+        if (StringUtils.isNotEmpty(seckillActivityInfo)) {
+            log.info("redis缓存数据:" + seckillActivityInfo);
+            seckillActivity = JSON.parseObject(seckillActivityInfo,
+                    SeckillActivity.class);
+        } else {
+            seckillActivity =
+                    seckillActivityDao.querySeckillActivityById(seckillActivityId);
+        }
+        String seckillCommodityInfo = redisService.getValue("seckillCommodity:"
+                + seckillActivity.getCommodityId());
+        if (StringUtils.isNotEmpty(seckillCommodityInfo)) {
+            log.info("redis缓存数据:" + seckillCommodityInfo);
+            seckillCommodity = JSON.parseObject(seckillActivityInfo,
+                    SeckillCommodity.class);
+        } else {
+            seckillCommodity =
+                    seckillCommodityDao.querySeckillCommodityById(seckillActivity.getCommodityId());
+        }
 
         resultMap.put("seckillActivity",seckillActivity);
         resultMap.put("seckillCommodity",seckillCommodity);
@@ -123,6 +149,16 @@ public class SeckillActivityController {
 
         ModelAndView modelAndView = new ModelAndView();
         try {
+
+            /*
+             * 判断用户是否在已购名单中
+             */
+            if (redisService.isInLimitMember(seckillActivityId, userId)) {
+                //提示用户已经在限购名单中，返回结果
+                modelAndView.addObject("resultInfo", "对不起，您已经在限购名单中");
+                modelAndView.setViewName("seckill_result");
+                return modelAndView;
+            }
             /*
              * 确认是否能够进行秒杀
              */
@@ -169,8 +205,22 @@ public class SeckillActivityController {
      * @return
      */
     @RequestMapping("/seckill/payOrder/{orderNo}")
-    public String payOrder(@PathVariable String orderNo){
+    public String payOrder(@PathVariable String orderNo) throws Exception {
         seckillActivityService.payOrderProcess(orderNo);
         return "redirect:/seckill/orderQuery/" + orderNo;
+    }
+
+    /**
+     * 获取当前服务器端的时间
+     * @return
+     */
+    @ResponseBody
+    @RequestMapping("/seckill/getSystemTime")
+    public String getSystemTime() {
+//设置日期格式
+        SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+// new Date()为获取当前系统时间
+        String date = df.format(new Date());
+        return date;
     }
 }
